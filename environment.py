@@ -1,6 +1,8 @@
 import numpy as np
 import gymnasium as gym
 from gymnasium.spaces import Box
+from torch.ao.nn.quantized.functional import threshold
+
 
 class STAR(gym.Env):
     def __init__(self,
@@ -78,6 +80,8 @@ class STAR(gym.Env):
         reward = 0
         opt_reward = 0.1
         min_R_d2d = 100
+        threshold_pu = 0.1 / self.K
+        threshold_d2d = 0.005
 
         G_power = self.compute_energy(G)
         if G_power > self.power:
@@ -93,9 +97,11 @@ class STAR(gym.Env):
             x = self.compute_energy((bs_user_k.T + star_user_k.conj().T @ Phi_k @ self.bs_star.T) @ self.G[:, k])
             inter_users = self.compute_energy((bs_user_k.T + star_user_k.conj().T @ Phi_k @ self.bs_star.T) @ G_remove)
             inter_d2d = self.compute_energy((d2d_user_k.T + star_user_k.conj().T @ Phi_k @ self.star_d2d[:, :self.D]) @ power_d2d_matrix)
-            rho_k = x / (inter_users + inter_d2d)
+            rho_k = x / (inter_users + inter_d2d + self.awgn_var * (self.K-1))
             reward += np.log2(1 + rho_k)
             opt_reward += np.log2(1 + self.K / 2)
+            if np.log2(1 + rho_k) < threshold_pu:
+                return 0, opt_reward
 
         for j in range(self.D):
             d2d_remove = np.delete(self.d2d_d2d, j, 0)
@@ -107,7 +113,9 @@ class STAR(gym.Env):
             inter_users = self.compute_energy((self.bs_d2d[:, j + self.D].T + self.star_d2d[:, self.D + j].conj().T @ Phi_j @ self.bs_star.T) @ self.G)
             inter_d2d = self.compute_energy((d2d_remove[:, j].T + self.star_d2d[:, self.D + j].conj().T @ Phi_j @ d2d_star_remove) @ power_d2d_matrix_remove)
             rho_j = x / (inter_users + inter_d2d)
-            min_R_d2d = min(min_R_d2d, np.log2(1 + rho_j))
+            # min_R_d2d = min(min_R_d2d, np.log2(1 + rho_j))
+            if np.log2(1 + rho_j) < threshold_d2d:
+                return 0, opt_reward
 
         return reward, opt_reward
 
@@ -118,7 +126,7 @@ class STAR(gym.Env):
         self.bs_users = np.random.randn(self.M, self.K) + 1j * np.random.randn(self.M, self.K)
         self.bs_star = np.random.randn(self.M, self.N) + 1j * np.random.randn(self.M, self.N)
         self.star_users = np.random.randn(self.N, self.K) + 1j * np.random.randn(self.N, self.K)
-        self.number_of_transmit = np.random.uniform(0, self.N)
+        self.number_of_transmit = 2.0
 
         init_action_G = np.hstack((np.real(self.G).ravel(), np.imag(self.G).ravel()))
         init_action_Phi = np.hstack((np.real(np.diag(self.Phi)), np.imag(np.diag(self.Phi))))
