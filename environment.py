@@ -80,8 +80,8 @@ class STAR(gym.Env):
         reward = 0
         opt_reward = 0.1
         min_R_d2d = 100
-        threshold_pu = 0.1 / self.K
-        threshold_d2d = 0.005
+        threshold_pu = 0.02 / self.K
+        threshold_d2d = 0.002
 
         G_power = self.compute_energy(G)
         if G_power > self.power:

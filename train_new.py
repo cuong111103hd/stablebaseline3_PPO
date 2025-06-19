@@ -149,7 +149,7 @@ if __name__ == "__main__":
     parser.add_argument("--K", type=int, default=4, help="Number of users")
     parser.add_argument("--D", type=int, default=4, help="Number of D2D pairs")
     parser.add_argument("--resume", action="store_true",default=True, help="Resume from last checkpoint")
-    parser.add_argument("--timesteps", type=int, default=int(10e6), help="Total training timesteps")
+    parser.add_argument("--timesteps", type=int, default=int(3e6), help="Total training timesteps")
     parser.add_argument("--save_freq", type=int, default=100000, help="Save frequency")
 
     args = parser.parse_args()
