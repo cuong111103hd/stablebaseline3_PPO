@@ -11,15 +11,18 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import BaseCallback
 from environment import STAR
 
+def linear_schedule(initial_value):
+    def func(progress_remaining):
+        return progress_remaining * initial_value
+    return func
 
-def generate_log_filename(log_dir, prefix="log", M=4, N=4, K=4, D=4):
-    parts = [prefix, f"M_{M}", f"N_{N}", f"K_{K}", f"D_{D}"]
+def generate_log_filename(log_dir, prefix="log", M=4, N=4, K=4, D=4, lr=3e-4):
+    parts = [prefix, f"M_{M}", f"N_{N}", f"K_{K}", f"D_{D}", f"lr_{lr:.0e}"]
     filename = "_".join(parts) + ".csv"
     return os.path.join(log_dir, filename)
 
-
-def find_latest_model_by_params(model_dir, M, N, K, D):
-    pattern = f"PPO_STAR_M_{M}_N_{N}_K_{K}_D_{D}_step_*.zip"
+def find_latest_model_by_params(model_dir, M, N, K, D, lr):
+    pattern = f"PPO_STAR_M_{M}_N_{N}_K_{K}_D_{D}_lr_{lr:.0e}_step_*.zip"
     full_path = os.path.join(model_dir, pattern)
     print(f"[DEBUG] Looking for model files at: {full_path}")
 
@@ -41,14 +44,12 @@ def find_latest_model_by_params(model_dir, M, N, K, D):
     current_step = extract_step(latest_model)
     return latest_model, current_step
 
-
-def save_model(model, model_dir, M, N, K, D, timestep):
+def save_model(model, model_dir, M, N, K, D, timestep, lr):
     os.makedirs(model_dir, exist_ok=True)
     timestamp = int(time.time())
-    filename = f"PPO_STAR_M_{M}_N_{N}_K_{K}_D_{D}_step_{timestep}_{timestamp}.zip"
+    filename = f"PPO_STAR_{M}_{N}_{K}_{D}_lr_{lr:.0e}_{timestep}_{timestamp}.zip"
     model.save(os.path.join(model_dir, filename))
     print(f"[INFO] Model saved: {filename}")
-
 
 class RewardLoggerCallback(BaseCallback):
     def __init__(self, log_path, verbose=0):
@@ -80,35 +81,38 @@ class RewardLoggerCallback(BaseCallback):
                 writer.writerow([self.episode_count, reward])
         return True
 
-
 def make_env(M, N, K, D):
     env = STAR(M, N, K, D)
     env = Monitor(env)
     return env
 
-
-def train(M, N, K, D, resume=True, total_timesteps=int(5e5), save_freq=100000):
+def train(M, N, K, D, resume=True, total_timesteps=int(5e5), save_freq=100000, learning_rate=3e-4, use_schedule=False):
     log_dir = "logs"
     model_dir = "models"
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
 
-    log_file = generate_log_filename(log_dir, prefix="log", M=M, N=N, K=K, D=D)
+    log_file = generate_log_filename(log_dir, prefix="log", M=M, N=N, K=K, D=D, lr=learning_rate)
     env = make_env(M, N, K, D)
+
+    if use_schedule:
+        lr = linear_schedule(learning_rate)
+    else:
+        lr = learning_rate
 
     if resume:
         print("[INFO] Attempting to resume training...")
-        model_path, current_step = find_latest_model_by_params(model_dir, M, N, K, D)
+        model_path, current_step = find_latest_model_by_params(model_dir, M, N, K, D, learning_rate)
         if model_path:
             print(f"[INFO] Resuming from: {model_path} at step {current_step}")
             model = PPO.load(model_path, env=env)
         else:
             print("[WARN] No matching model found, starting new training")
-            model = PPO("MlpPolicy", env, verbose=1, tensorboard_log=log_dir)
+            model = PPO("MlpPolicy", env, verbose=1, tensorboard_log=log_dir, learning_rate=lr)
             current_step = 0
     else:
         print("[INFO] Starting new training session...")
-        model = PPO("MlpPolicy", env, verbose=1, tensorboard_log=log_dir)
+        model = PPO("MlpPolicy", env, verbose=1, tensorboard_log=log_dir, learning_rate=lr)
         current_step = 0
 
     callback = RewardLoggerCallback(log_path=log_file)
@@ -117,13 +121,12 @@ def train(M, N, K, D, resume=True, total_timesteps=int(5e5), save_freq=100000):
         train_step = min(save_freq, total_timesteps - current_step)
         model.learn(total_timesteps=train_step, reset_num_timesteps=False, callback=callback)
         current_step += train_step
-        save_model(model, model_dir, M, N, K, D, current_step)
+        save_model(model, model_dir, M, N, K, D, current_step, learning_rate)
 
-
-def test(model_path=None, M=4, N=4, K=4, D=4):
+def test(model_path=None, M=4, N=4, K=4, D=4, lr=3e-4):
     env = make_env(M, N, K, D)
     if model_path is None:
-        model_path, _ = find_latest_model_by_params("models", M, N, K, D)
+        model_path, _ = find_latest_model_by_params("models", M, N, K, D, lr)
     if model_path is None:
         print("[ERROR] No model found to test.")
         return
@@ -141,16 +144,17 @@ def test(model_path=None, M=4, N=4, K=4, D=4):
             break
     print(f"[TEST] Total reward: {total_reward}")
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--M", type=int, default=4, help="Number of BS antennas")
     parser.add_argument("--N", type=int, default=4, help="Number of STAR-RIS elements")
     parser.add_argument("--K", type=int, default=4, help="Number of users")
     parser.add_argument("--D", type=int, default=4, help="Number of D2D pairs")
-    parser.add_argument("--resume", action="store_true",default=True, help="Resume from last checkpoint")
+    parser.add_argument("--resume", action="store_true", default=True, help="Resume from last checkpoint")
     parser.add_argument("--timesteps", type=int, default=int(3e6), help="Total training timesteps")
     parser.add_argument("--save_freq", type=int, default=100000, help="Save frequency")
+    parser.add_argument("--lr", type=float, default=3e-4, help="Initial learning rate for PPO")
+    parser.add_argument("--schedule", action="store_true", help="Use linear learning rate schedule")
 
     args = parser.parse_args()
 
@@ -161,8 +165,10 @@ if __name__ == "__main__":
         D=args.D,
         resume=args.resume,
         total_timesteps=args.timesteps,
-        save_freq=args.save_freq
+        save_freq=args.save_freq,
+        learning_rate=args.lr,
+        use_schedule=args.schedule
     )
 
     # Uncomment to test:
-    # test(M=args.M, N=args.N, K=args.K, D=args.D)
+    # test(M=args.M, N=args.N, K=args.K, D=args.D, lr=args.lr)
